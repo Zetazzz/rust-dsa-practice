@@ -1,1 +1,1 @@
-pub mod bin_search;
+pub mod search;
