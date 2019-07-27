@@ -51,21 +51,29 @@ impl<T> Node<T> {
     fn take_next(&mut self) -> Option<T> {
         let current_next = self.next.take();
 
-        current_next.map(|nn_node| {
-            let boxed_node = unsafe { Box::from_raw(nn_node.as_ptr()) };
+        current_next.map(|nn_next_node| {
+            let mut boxed_next_node = unsafe { Box::from_raw(nn_next_node.as_ptr()) };
 
-            self.next = boxed_node.next;
+            self.next = boxed_next_node.next.take();
 
-            boxed_node.element.unwrap()
+            boxed_next_node.element.take().unwrap()
         })
     }
 
-    fn peek_next(&self) -> Option<T> {
+    fn peek_next(&self) -> Option<&T> {
         self.next.map(|nn_node| {
-            let boxed_node = unsafe { Box::from_raw(nn_node.as_ptr()) };
+            let p_node = nn_node.as_ptr();
 
-            boxed_node.element.unwrap()
+            unsafe { (*p_node).element.as_ref().unwrap() }
         })
+    }
+}
+
+impl<T> Drop for Node<T> {
+    fn drop(&mut self) {
+        println!("Dropping Node!");
+
+        let _ = self.take_next();
     }
 }
 
@@ -87,9 +95,9 @@ impl<T> SingleLinkedList<T> {
     }
 
     pub fn add(&mut self, element: T) {
-        let mut boxed_node = unsafe { Box::from_raw(self.tail.as_ptr()) };
+        let r_tail = unsafe { self.tail.as_mut() };
 
-        let nn_new_node = boxed_node.set_next(element);
+        let nn_new_node = r_tail.set_next(element);
 
         self.tail = nn_new_node;
 
@@ -100,17 +108,17 @@ impl<T> SingleLinkedList<T> {
         if self.len == 0 {
             self.add(element);
         } else {
-            let mut boxed_node = unsafe { Box::from_raw(self.head.as_ptr()) };
+            let r_head = unsafe { self.head.as_mut() };
 
-            boxed_node.set_next(element);
+            r_head.set_next(element);
 
             self.len += 1;
         }
     }
 
     pub fn pop(&mut self) -> Option<T> {
-        let mut boxed_node = unsafe { Box::from_raw(self.head.as_ptr()) };
-        let popped_node = boxed_node.take_next();
+        let r_head = unsafe { self.head.as_mut() };
+        let popped_node = r_head.take_next();
 
         self.len -= 1;
 
@@ -121,15 +129,23 @@ impl<T> SingleLinkedList<T> {
         popped_node
     }
 
-    pub fn peek_head(&self) -> Option<T> {
-        let boxed_node = unsafe { Box::from_raw(self.head.as_ptr()) };
+    pub fn peek_head(&self) -> Option<&T> {
+        let r_head = unsafe { self.head.as_ref() };
 
-        boxed_node.peek_next()
+        r_head.peek_next()
     }
 
-    pub fn peek_tail(&self) -> Option<T> {
-        let boxed_node = unsafe { Box::from_raw(self.tail.as_ptr()) };
+    pub fn peek_tail(&self) -> Option<&T> {
+        let r_tail = unsafe { self.tail.as_ref() };
 
-        boxed_node.element
+        r_tail.element.as_ref()
+    }
+}
+
+impl<T> Drop for SingleLinkedList<T> {
+    fn drop(&mut self) {
+        println!("Dropping SingleLinkedList!");
+
+        let _ = unsafe { Box::from_raw(self.head.as_ptr()) };
     }
 }
