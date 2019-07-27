@@ -1,5 +1,4 @@
-
-use algorithms::search::bin_search;
+use crate::algorithms::search::bin_search;
 
 #[test]
 fn bin_search_found_first() {

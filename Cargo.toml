@@ -1,6 +1,7 @@
 [package]
-name = "rust-dsa-practice"
+name = "dsa"
 version = "0.1.0"
 authors = ["ZhenZhi <zetazz@163.com>"]
+edition = "2018"
 
 [dependencies]
