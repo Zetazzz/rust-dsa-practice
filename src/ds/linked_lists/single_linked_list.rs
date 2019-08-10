@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 #[macro_export]
@@ -10,7 +11,7 @@ macro_rules! single_linked_list {
             let mut sll = SingleLinkedList::new();
 
             $(
-                sll.add($elem);
+                sll.push_back($elem);
             )*
 
             sll
@@ -19,26 +20,19 @@ macro_rules! single_linked_list {
 }
 
 pub struct Node<T> {
-    element: Option<T>,
+    element: T,
     next: Option<NonNull<Node<T>>>,
 }
 
 impl<T> Node<T> {
-    fn new(element: T, next: Option<NonNull<Node<T>>>) -> Self {
+    pub fn new(element: T, next: Option<NonNull<Node<T>>>) -> Self {
         Node {
-            element: Some(element),
+            element: element,
             next: next,
         }
     }
 
-    fn empty() -> Self {
-        Node {
-            element: None,
-            next: None,
-        }
-    }
-
-    fn set_next(&mut self, element: T) -> NonNull<Node<T>> {
+    pub fn push_next(&mut self, element: T) -> NonNull<Node<T>> {
         let current_next = self.next.take();
 
         let nn_node = Box::into_raw_non_null(Box::new(Node::new(element, current_next)));
@@ -48,7 +42,7 @@ impl<T> Node<T> {
         nn_node
     }
 
-    fn take_next(&mut self) -> Option<T> {
+    pub fn take_next(&mut self) -> Option<T> {
         let current_next = self.next.take();
 
         current_next.map(|nn_next_node| {
@@ -56,96 +50,293 @@ impl<T> Node<T> {
 
             self.next = boxed_next_node.next.take();
 
-            boxed_next_node.element.take().unwrap()
+            boxed_next_node.element
         })
     }
 
-    fn peek_next(&self) -> Option<&T> {
+    pub fn peek_next(&self) -> Option<&T> {
         self.next.map(|nn_node| {
             let p_node = nn_node.as_ptr();
 
-            unsafe { (*p_node).element.as_ref().unwrap() }
+            unsafe { &(*p_node).element }
         })
     }
-}
 
-impl<T> Drop for Node<T> {
-    fn drop(&mut self) {
-        println!("Dropping Node!");
-
-        let _ = self.take_next();
+    pub fn has_next(&self) -> bool {
+        self.next.is_some()
     }
 }
 
 pub struct SingleLinkedList<T> {
-    head: NonNull<Node<T>>,
-    tail: NonNull<Node<T>>,
+    head: Option<NonNull<Node<T>>>,
+    tail: Option<NonNull<Node<T>>>,
     len: usize,
+    mark: PhantomData<Box<Node<T>>>,
 }
 
 impl<T> SingleLinkedList<T> {
     pub fn new() -> Self {
-        let nn_node = Box::into_raw_non_null(Box::new(Node::empty()));
-
         SingleLinkedList {
-            head: nn_node,
-            tail: nn_node,
+            head: None,
+            tail: None,
             len: 0,
+            mark: PhantomData,
         }
     }
 
-    pub fn add(&mut self, element: T) {
-        let r_tail = unsafe { self.tail.as_mut() };
+    pub fn iter(&self) -> Iter<'_, T> {
+        Iter {
+            head: self.head,
+            len: self.len,
+            mark: PhantomData,
+        }
+    }
 
-        let nn_new_node = r_tail.set_next(element);
+    pub fn iter_mut(&mut self) -> IterMut<'_, T> {
+        IterMut {
+            head: self.head,
+            len: self.len,
+            mark: PhantomData,
+        }
+    }
 
-        self.tail = nn_new_node;
+    pub fn cursor(&self) -> Cursor<T> {
+        Cursor { current: self.head }
+    }
+
+    pub fn reverse(&mut self) {
+        let mut cursor = self.cursor();
+
+        if let Some(first_node) = cursor.current() {
+            while let Some(next_element) = first_node.take_next() {
+                self.push_front(next_element);
+            }
+        }
+    }
+
+    pub fn push_back(&mut self, element: T) {
+        match self.tail {
+            Some(mut nn_tail) => {
+                let r_tail = unsafe { nn_tail.as_mut() };
+
+                let nn_new_node = r_tail.push_next(element);
+
+                self.tail = Some(nn_new_node);
+            }
+            None => {
+                self.add_first_node(element);
+            }
+        }
 
         self.len += 1;
     }
 
-    pub fn push(&mut self, element: T) {
-        if self.len == 0 {
-            self.add(element);
-        } else {
-            let r_head = unsafe { self.head.as_mut() };
+    pub fn push_front(&mut self, element: T) {
+        match self.head {
+            Some(nn_head) => {
+                let nn_new_node =
+                    Box::into_raw_non_null(Box::new(Node::new(element, Some(nn_head))));
 
-            r_head.set_next(element);
-
-            self.len += 1;
-        }
-    }
-
-    pub fn pop(&mut self) -> Option<T> {
-        let r_head = unsafe { self.head.as_mut() };
-        let popped_node = r_head.take_next();
-
-        self.len -= 1;
-
-        if self.len == 0 {
-            self.tail = self.head;
+                self.head = Some(nn_new_node);
+            }
+            None => {
+                self.add_first_node(element);
+            }
         }
 
-        popped_node
+        self.len += 1;
     }
 
-    pub fn peek_head(&self) -> Option<&T> {
-        let r_head = unsafe { self.head.as_ref() };
+    pub fn pop_front(&mut self) -> Option<T> {
+        self.head.map(|nn_head| {
+            let mut boxed_taken_head = unsafe { Box::from_raw(nn_head.as_ptr()) };
 
-        r_head.peek_next()
+            self.head = boxed_taken_head.next.take();
+
+            if let None = self.head {
+                self.tail = None;
+            }
+
+            boxed_taken_head.element
+        })
     }
 
-    pub fn peek_tail(&self) -> Option<&T> {
-        let r_tail = unsafe { self.tail.as_ref() };
+    fn add_first_node(&mut self, element: T) {
+        let nn_new_node = Box::into_raw_non_null(Box::new(Node::new(element, None)));
 
-        r_tail.element.as_ref()
+        self.head = Some(nn_new_node);
+        self.tail = Some(nn_new_node);
+    }
+
+    pub fn front(&self) -> Option<&T> {
+        unsafe { self.head.as_ref().map(|node| &node.as_ref().element) }
+    }
+
+    pub fn front_mut(&mut self) -> Option<&T> {
+        unsafe { self.head.as_mut().map(|node| &node.as_mut().element) }
+    }
+
+    pub fn back(&self) -> Option<&T> {
+        unsafe { self.tail.as_ref().map(|node| &node.as_ref().element) }
+    }
+
+    pub fn back_mut(&mut self) -> Option<&T> {
+        unsafe { self.tail.as_mut().map(|node| &node.as_mut().element) }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.head.is_none()
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn clear(&mut self) {
+        *self = Self::new();
     }
 }
 
 impl<T> Drop for SingleLinkedList<T> {
     fn drop(&mut self) {
-        println!("Dropping SingleLinkedList!");
+        while let Some(_) = self.pop_front() {}
+    }
+}
 
-        let _ = unsafe { Box::from_raw(self.head.as_ptr()) };
+pub struct Iter<'a, T: 'a> {
+    head: Option<NonNull<Node<T>>>,
+    len: usize,
+    mark: PhantomData<&'a Node<T>>,
+}
+
+impl<'a, T> Iterator for Iter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.len == 0 {
+            None
+        } else {
+            self.head.map(|node| {
+                let node = unsafe { &*node.as_ptr() };
+                self.len -= 1;
+                self.head = node.next;
+                &node.element
+            })
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len, Some(self.len))
+    }
+}
+
+pub struct IterMut<'a, T: 'a> {
+    head: Option<NonNull<Node<T>>>,
+    len: usize,
+    mark: PhantomData<&'a mut Node<T>>,
+}
+
+impl<'a, T> Iterator for IterMut<'a, T> {
+    type Item = &'a mut T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.len == 0 {
+            None
+        } else {
+            self.head.map(|node| {
+                let node = unsafe { &mut *node.as_ptr() };
+                self.len -= 1;
+                self.head = node.next;
+                &mut node.element
+            })
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len, Some(self.len))
+    }
+}
+
+pub struct IntoIter<T> {
+    linked_list: SingleLinkedList<T>,
+}
+
+impl<T> Iterator for IntoIter<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.linked_list.pop_front()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.linked_list.len, Some(self.linked_list.len))
+    }
+}
+
+impl<T> IntoIterator for SingleLinkedList<T> {
+    type Item = T;
+    type IntoIter = IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        IntoIter { linked_list: self }
+    }
+}
+
+impl<'a, T> IntoIterator for &'a SingleLinkedList<T> {
+    type Item = &'a T;
+    type IntoIter = Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a mut SingleLinkedList<T> {
+    type Item = &'a mut T;
+    type IntoIter = IterMut<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
+pub struct Cursor<T> {
+    current: Option<NonNull<Node<T>>>,
+}
+
+impl<T> Cursor<T> {
+    pub fn current(&mut self) -> Option<&mut Node<T>> {
+        self.current.map(|node| unsafe { &mut *node.as_ptr() })
+    }
+
+    pub fn push_next(&mut self, element: T) {
+        if let Some(mut node) = self.current {
+            unsafe {
+                node.as_mut().push_next(element);
+            }
+        }
+    }
+
+    pub fn pop_next(&mut self) -> Option<T> {
+        if let Some(mut node) = self.current {
+            unsafe { node.as_mut().take_next() }
+        } else {
+            None
+        }
+    }
+}
+
+impl<T> Iterator for Cursor<T> {
+    type Item = NonNull<Node<T>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.current {
+            Some(node) => {
+                let node = unsafe { node.as_ref() };
+                self.current = node.next;
+                node.next
+            }
+            None => None,
+        }
     }
 }
